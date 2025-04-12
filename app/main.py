@@ -6,6 +6,8 @@ from app.presentation.program_api import programApiRouter
 from app.presentation.task_api import taskApiRouter
 from app.application.agents.pdf_agent import pdfRouter
 from app.presentation.excel_api import excelRouter
+from app.presentation.calendar_event_api import calendarRouter
+from app.presentation.chromadb_view_api import cromaRouter
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
@@ -26,6 +28,12 @@ app.include_router(programApiRouter, prefix="/program", tags=["ProgramAPI"])
 app.include_router(taskApiRouter, prefix="/task", tags=["TaskAPI"])
 app.include_router(pdfRouter, prefix="/upload", tags=["UploadAPI"])
 app.include_router(excelRouter, prefix="/excel", tags=["ExcelAPI"])
+app.include_router(
+    calendarRouter, prefix="/calendar", tags=["CalendarAPI"]
+)  # Include the calendar router
+app.include_router(
+    cromaRouter, prefix="/chromadb", tags=["ChromaDBAPI"]
+)  # Include the ChromaDB router
 
 
 @app.get("/")

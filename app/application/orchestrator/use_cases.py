@@ -15,6 +15,9 @@ from app.application.agents.calendar_agent import CalendarAgent
 from app.application.agents.general_agent import GeneralAgent
 from app.application.agents.web_agent import WebAgent
 from app.application.agents.project_agent import ProjectAgent
+
+# from app.application.agents.work_agent import WorkAgent
+from app.application.agents.algo_work_agent import WorkAgent
 from app.core.di import Container
 from openai import OpenAI
 
@@ -67,7 +70,7 @@ class Orchestrator:
             for history_chunk in history_chunks or [""]:  # Ensure history exists
                 try:
                     response = self.client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",  # Use the best available Groq model
+                        model="gemma2-9b-it",  # Use the best available Groq model
                         # model="mistralai/mistral-small-24b-instruct-2501:free",
                         messages=[
                             {
@@ -93,6 +96,7 @@ class Orchestrator:
                                 "📌 'outlook' → (specializes in email management).\n "
                                 "📌 'ms_excel_agent' → (specializes in microfoft excel processing).\n "
                                 "📌 'ms_word_agent' → (specializes in microfoft word processing).\n "
+                                "📌 'alog_worker' → (specializes in electrical work related or alog_worker).\n "
                                 "\n\n"
                                 "If the user’s message follows up on a past topic, assume continuity and respond accordingly.",
                             },
@@ -132,6 +136,7 @@ class Orchestrator:
             "outlook": OutlookAgent,
             "ms_excel_agent": MSExcelAgent,
             "ms_word_agent": MSWordAgent,
+            "alog_worker": WorkAgent,
         }
 
         agent_class = agent_mapping.get(decision)

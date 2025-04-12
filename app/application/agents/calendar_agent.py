@@ -1,11 +1,16 @@
 from app.domain.interfaces import Agent
 from app.infrastructure.services.calendar.calendar_service import CalendarService
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 import groq  # Groq's API
 import os
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+import pytz
+from dateutil.parser import isoparse
+
+local_tz = pytz.timezone("Asia/Kolkata")
+
 
 SERVICE_ACCOUNT_FILE = r"C:\Algo Orange\algoorangeapi\credentials.json"
 SCOPES = [
@@ -13,6 +18,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
 ]
 calendar_service: CalendarService
+WORKING_HOURS_START = 9
+WORKING_HOURS_END = 17
+SLOT_DURATION_MINUTES = 240
 
 
 class CalendarAgent(Agent):
@@ -376,6 +384,142 @@ class CalendarAgent(Agent):
         except Exception as e:
 
             return {"status": "error", "message": str(e)}
+
+    async def get_multi_day_free_slots(self, days=5):
+        """
+        Returns all time slots across multiple days within working hours.
+        Each slot is marked as either 'available' or 'booked'.
+        """
+        creds = service_account.Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_FILE, scopes=SCOPES
+        )
+        service = build("calendar", "v3", credentials=creds)
+        now = datetime.now(local_tz)
+        free_slots = {}
+
+        for i in range(days):
+            date = now + timedelta(days=i)
+            date_str = date.strftime("%Y-%m-%d")
+
+            day_start = local_tz.localize(
+                datetime.combine(date.date(), time(hour=WORKING_HOURS_START))
+            )
+            day_end = local_tz.localize(
+                datetime.combine(date.date(), time(hour=WORKING_HOURS_END))
+            )
+
+            # Convert to UTC and format as ISO string with "Z"
+            time_min = day_start.astimezone(pytz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            time_max = day_end.astimezone(pytz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            events_result = (
+                service.events()
+                .list(
+                    calendarId="sachinbfrnd@gmail.com",
+                    timeMin=time_min,
+                    timeMax=time_max,
+                    singleEvents=True,
+                    orderBy="startTime",
+                )
+                .execute()
+            )
+
+            events = []
+            for event in events_result.get("items", []):
+                start = event["start"].get("dateTime")
+                end = event["end"].get("dateTime")
+                if start and end:
+                    events.append(
+                        {
+                            "start": isoparse(start)
+                            .astimezone(local_tz)
+                            .replace(tzinfo=None),
+                            "end": isoparse(end)
+                            .astimezone(local_tz)
+                            .replace(tzinfo=None),
+                        }
+                    )
+
+            slots = []
+            current_time = day_start.replace(tzinfo=None)
+
+            while current_time + timedelta(
+                minutes=SLOT_DURATION_MINUTES
+            ) <= day_end.replace(tzinfo=None):
+                slot_end = current_time + timedelta(minutes=SLOT_DURATION_MINUTES)
+                overlapping = any(
+                    event["start"] < slot_end and event["end"] > current_time
+                    for event in events
+                )
+                slots.append(
+                    {
+                        "start": current_time.strftime("%H:%M"),
+                        "end": slot_end.strftime("%H:%M"),
+                        "status": "booked" if overlapping else "available",
+                    }
+                )
+                current_time += timedelta(minutes=SLOT_DURATION_MINUTES)
+
+            free_slots[date_str] = slots
+
+        return free_slots
+
+    async def create_calendar_events_google(self, booking: dict) -> dict:
+        """
+        Creates a calendar event from the confirmed booking info.
+        booking format:
+        {
+            "service": "Electrical work",
+            "datetime": "2025-04-09T09:00:00",
+            "name": "Jayaram",
+            "phone": "9698132646"
+        }
+        """
+        try:
+            # Get calendar service
+            creds = service_account.Credentials.from_service_account_file(
+                SERVICE_ACCOUNT_FILE, scopes=SCOPES
+            )
+            service = build("calendar", "v3", credentials=creds)
+
+            # Parse start and end time
+            start_dt = datetime.fromisoformat(booking["datetime"])
+            end_dt = start_dt + timedelta(hours=1)  # 1-hour default duration
+            start_dt = local_tz.localize(start_dt)
+            end_dt = local_tz.localize(end_dt)
+
+            # Event structure
+            event = {
+                "summary": f'{booking["service"]} - {booking["name"]}',
+                "description": f'Service: {booking["service"]}\n'
+                f'Customer: {booking["name"]}\n'
+                f'Phone: {booking["phone"]}',
+                "start": {
+                    "dateTime": start_dt.isoformat(),
+                    "timeZone": str(local_tz),
+                },
+                "end": {
+                    "dateTime": end_dt.isoformat(),
+                    "timeZone": str(local_tz),
+                },
+                "attendees": [],  # Optional
+            }
+
+            # Insert the event
+            created_event = (
+                service.events()
+                .insert(calendarId="sachinbfrnd@gmail.com", body=event)
+                .execute()
+            )
+
+            return {
+                "success": True,
+                "event_link": created_event.get("htmlLink"),
+                "message": f"✅ Appointment booked successfully for {booking['name']} on {start_dt.strftime('%Y-%m-%d %H:%M')}!",
+            }
+
+        except Exception as e:
+            return {"success": False, "message": f"❌ Failed to create event: {str(e)}"}
 
 
 def extract_event_details(userchatquery):
