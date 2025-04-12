@@ -3,4 +3,8 @@ app/__pycache__/
 .venv/
 .env
 credentials.json
+chroma_db/
+chromaa_db/
 gmail_credentials.json
+
+chroma_db/chroma.sqlite3
