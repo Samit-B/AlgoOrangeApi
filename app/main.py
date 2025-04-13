@@ -8,6 +8,7 @@ from app.application.agents.pdf_agent import pdfRouter
 from app.presentation.excel_api import excelRouter
 from app.presentation.calendar_event_api import calendarRouter
 from app.presentation.chromadb_view_api import cromaRouter
+from app.application.agents.pdf_agent2 import pdf2Router
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
@@ -27,6 +28,7 @@ app.include_router(projectApiRouter, prefix="/project", tags=["ProjectAPI"])
 app.include_router(programApiRouter, prefix="/program", tags=["ProgramAPI"])
 app.include_router(taskApiRouter, prefix="/task", tags=["TaskAPI"])
 app.include_router(pdfRouter, prefix="/upload", tags=["UploadAPI"])
+app.include_router(pdf2Router, prefix="/upload2", tags=["UploadAPI2"])
 app.include_router(excelRouter, prefix="/excel", tags=["ExcelAPI"])
 app.include_router(
     calendarRouter, prefix="/calendar", tags=["CalendarAPI"]

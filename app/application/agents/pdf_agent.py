@@ -220,7 +220,7 @@ class PdfAgent(Agent):
             chunk_prompt = (
                 f"You are a helpful assistant. A user has a question about the following PDF content:\n\n"
                 f"{chunk}\n\n"
-                f"User's question: {userChatQuery}\n"
+                f"User wants to extract the JSON for the clause : {userChatQuery}\n"
                 f"Give a clear, concise, and well-structured answer based only on the content provided above. Avoid repeating or labeling chunk numbers."
                 f"Omit any statements about content not being found or missing."
             )
