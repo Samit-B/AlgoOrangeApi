@@ -1,258 +1,230 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
-import re
-from app.domain.interfaces import Agent
-
 import groq
+import re
+from app.application.agents import calendar_agent
+from app.application.agents.calendar_agent import CalendarAgent
+from app.domain.interfaces import Agent
+import re
 
-from dateutil.parser import parse
-
-from app.presentation.calendar_event_api import Event, get_free_slots
+from app.presentation.calendar_event_api import Event, get_free_slots, book_slot
 
 
 class WorkAgent(Agent):
     def __init__(self):
-        """Initialize the WorkAgent."""
+        """Initialize the LLM client"""
         self.client = groq.Client(api_key=os.getenv("GROQ_API_KEY"))
 
     async def handle_query(self, userChatQuery, chatHistory):
-        """Handles electrician-related queries (intent detection + service info + appointment booking)"""
-        intent = self.detect_intent(userChatQuery)
-
-        if intent == "book_appointment":
-            booking_data = self.extract_booking_details(userChatQuery, chatHistory)
-
-            if not self.is_booking_data_complete(booking_data):
-                missing_fields = self.get_missing_fields(booking_data)
-                followup_query = self.ask_followup_questions(missing_fields)
-                return followup_query
-
-            # Check availability in free slots by calling the external method
-            available_slots = (
-                get_free_slots()
-            )  # Call the method to check for free slots
-            if not available_slots:
-                return "Sorry, no slots available currently. Please try again later."
-
-            # Format the date
-            formatted_date = self.format_booking_date(booking_data["preferred_date"])
-            if not formatted_date:
-                return "Invalid date format. Please provide a valid date."
-
-            # Format the time
-            formatted_time = datetime.strptime(
-                booking_data["preferred_time"], "%I:%M %p"  # Handle AM/PM
-            ).strftime("%H:%M")
-
-            # Validate and book the appointment
-            # Update the booking data with formatted values
-            booking_data["preferred_date"] = formatted_date
-            booking_data["preferred_time"] = formatted_time
-
-            # Check if the selected date and time are available in free slots
-            available_slot = self.check_slot_availability(
-                available_slots, formatted_date, formatted_time
-            )
-            if available_slot["status"] == "available":
-                event = Event(
-                    date=formatted_date,
-                    start_time=formatted_time,
-                    end_time=self.calculate_end_time(formatted_time),
-                    description=booking_data.get("service_type"),
-                    customer_name=booking_data.get("customer_name"),
-                    phone_number=booking_data.get("phone_number"),
-                )
-                booking_response = event  # Call the method to book the slot
-                return booking_response
-            else:
-
-                # Assuming available_slots is a list of dictionaries, you need to extract a field to join
-                available_slots_str = "\n".join(
-                    [
-                        f"From {slot['date']}{slot['start_time']} to {slot['end_time']}"
-                        for slot in available_slots
-                    ]
-                )
-
-                # Now you can safely concatenate the response
-                response = "Here are the available slots:\n" + available_slots_str
-
-                return (
-                    "The selected slot is not available. Here are some available slots:\n"
-                    + (response)
-                )
-
-        elif intent == "service_info":
-            return self.provide_service_info(userChatQuery)
-
-        else:
-            return "Hi! I can help you with booking electrician services or provide pricing info. What do you need today?"
-
-    def detect_intent(self, userChatQuery):
-        prompt = (
-            f"User: {userChatQuery}\n"
-            "Intent (Respond with ONLY ONE of these options):\n"
-            "book_appointment\n"
-            "service_info\n"
-        )
-        response = self.query_llm(prompt)
-        return response.strip().lower()
-
-    def extract_booking_details(self, userChatQuery, chat_history):
-        prompt = (
-            f"User Query: {userChatQuery}, Chat History: {chat_history}\n"
-            "Extract the following fields as JSON from the user's query:\n"
-            "- customer_name\n"
-            "- customer_phone\n"
-            "- service_type (e.g., 'fan installation', 'wiring', 'repair')\n"
-            "- address (if mentioned)\n"
-            "- preferred_date (e.g., 'April 10', 'tomorrow', 'next week')\n"
-            "- preferred_start_time (e.g., '9:00', '10:00', 'morning', 'afternoon')\n"
-            "- preferred_end_time (e.g., '12:00', '2:00 PM', 'evening')\n"
-            "- appointment_type (e.g., 'repair', 'installation', 'inspection')\n"
-            "- status (e.g., 'booked', 'pending')\n"
-            "- notes (if any, e.g., 'urgent repair', 'follow-up required')\n"
-            "\n"
-            "If the user mentions terms like 'morning', 'afternoon', 'evening', etc., automatically infer the correct time range based on these terms.\n"
-            "If the user specifies relative dates such as 'tomorrow', 'next week', or specific formats like 'April 10', resolve these into the correct date.\n"
-            "Ensure that you interpret the user's intent accurately, even if the details are implicit in the query. "
-            "Respond with only the JSON object containing the extracted details."
-        )
-
-        # Query the LLM for extracting details
-        response = self.query_llm(prompt)
-
-        # Clean the response and extract the details
+        """
+        Handle the user query by transferring it to the LLM and returning the response.
+        """
         try:
-            cleaned_response = re.sub(r"```json|```", "", response).strip()
-            cleaned_response = (
-                cleaned_response.replace("\n", " ").replace("\t", " ").strip()
-            )
-            booking_data = json.loads(cleaned_response)
-        except json.JSONDecodeError:
-            booking_data = {}
-
-        return booking_data
-
-    def is_booking_data_complete(self, booking_data):
-        required_fields = [
-            "customer_name",
-            "customer_phone",
-            "service_type",
-            "address",
-            "preferred_date",
-            "preferred_start_time",
-        ]
-        return all(
-            field in booking_data and booking_data[field] for field in required_fields
-        )
-
-    def get_missing_fields(self, booking_data):
-        required_fields = [
-            "customer_name",
-            "customer_phone",
-            "service_type",
-            "address",
-            "preferred_date",
-            "preferred_start_time",
-        ]
-        return [field for field in required_fields if not booking_data.get(field)]
-
-    def ask_followup_questions(self, missing_fields):
-        prompt = (
-            f"The user wants to book a service but is missing the following: {', '.join(missing_fields)}.\n"
-            f"Ask a natural language follow-up question to gather this info."
-        )
-        return self.query_llm(prompt)
-
-    def provide_service_info(self, userChatQuery):
-        """Provide hardcoded electrician services and prices."""
-        services = [
-            {"name": "Electrical Wiring", "price": 1000},
-            {"name": "Lighting Installation", "price": 1500},
-            {"name": "Circuit Breaker Repair", "price": 2000},
-            {"name": "Home Inspection", "price": 3000},
-            {"name": "Fan Installation", "price": 800},
-            {"name": "AC Repair", "price": 2500},
-        ]
-        prompt = (
-            f"You are a helpful assistant for an electrician. "
-            f"User query: '{userChatQuery}'. "
-            f"Here are the available electrician services and their prices:\n"
-            f"{services}\n\n"
-            f"Please respond with the available services based on the user's query. "
-            f"If the service requested (e.g., water line repair) is not part of the offered services, "
-            f"kindly let the user know and provide the list of available services."
-        )
-
-        # Query the LLM (simulate response here for now)
-        response = self.query_llm(prompt)
-
-        # Return the response from the LLM
-        return response.strip()
-
-    def query_llm(self, prompt):
-        """Query the LLM and return the response"""
-        response = self.client.chat.completions.create(
-            model="gemma2-9b-it",
-            messages=[
+            # Define the services JSON
+            services = json.dumps(
                 {
-                    "role": "system",
-                    "content": "You are a smart, friendly, and helpful chat assistant for an electrician named Samit. "
-                    "Your job is to handle incoming messages from users when Samit is unavailable..",
-                },
-                {"role": "user", "content": prompt},
-            ],
-        )
-        return response.choices[0].message.content
+                    "Electrical Wiring": "$100 per hour",
+                    "Lighting Installation": "$150 per fixture",
+                    "Circuit Breaker Repair": "$200 flat rate",
+                    "Home Inspection": "$300 flat rate",
+                }
+            )
+            available_slots = get_free_slots()
+            free_slots_str = json.dumps(available_slots)
 
-    def check_slot_availability(self, available_slots, booking_date, booking_time):
-        """
-        Use LLM to validate if the given date and time are available in free slots.
-        """
-        # Format the available slots into a readable string for the LLM
-        slots_str = "\n".join(
-            [
-                f"Date: {slot['date']}, Start Time: {slot['start_time']}, End Time: {slot['end_time']}, Status: {slot['status']}"
-                for slot in available_slots
-            ]
-        )
+            # Construct LLM prompt
+            # Construct LLM system prompt
+            # Construct LLM system prompt
+            system_prompt = (
+                "You are a smart, friendly, and helpful chat assistant for an electrician named Samit. "
+                "Your job is to handle incoming messages from users when Samit is unavailable. "
+                "Behave like a professional **human** assistant — never say you're an AI or LLM.\n\n"
+                "## Your Responsibilities:\n\n"
+                "**1. Greet the user**\n"
+                "- Begin with a warm, polite greeting.\n"
+                "- If the user says something like 'Hi Samit', 'Are you available?', or addresses Samit directly:\n"
+                "  → Reply: 'Hi! Unfortunately, Samit is not available at the moment. I'm here to assist you. Please let me know how I can help.'\n"
+                "- Otherwise, just greet them and offer help.\n\n"
+                "**2. Handle Inquiries**\n"
+                "- If the user asks about services or pricing, provide the following:\n"
+                f"{services}\n\n"
+                "- If the user asks about availability, inform them about weekday availability between 09:00-12:00 and 13:00-17:00.\n\n"
+                f"{free_slots_str}\n\n"
+                "**3. Guide Booking Process**\n"
+                "- Based on the current booking state, ask for missing information one step at a time.\n"
+                "- Ask for: appointment type, date (YYYY-MM-DD), start time (HH:MM), end time (HH:MM), name, and mobile number.\n"
+                "- Validate the date (no weekends) and time (within allowed slots).\n\n"
+                "**4. Final Confirmation**\n"
+                "- Once all booking details are collected, summarize the appointment and ask for confirmation.\n"
+                "- If the user confirms, output a JSON with the booking details and the `__confirm_and_book__` keyword.\n"
+                "```json\n"
+                "{\n"
+                '  "appointment_type": "<service name>",\n'
+                '  "date": "<YYYY-MM-DD>",\n'
+                '  "start_time": "<HH:MM>",\n'
+                '  "end_time": "<HH:MM>",\n'
+                '  "customer_name": "<user name>",\n'
+                '  "customer_phone": "<user phone number>"\n'
+                "}\n"
+                "```\n"
+                "__confirm_and_book__\n"
+                "- Do NOT include the keyword unless all details are confirmed.\n\n"
+                "**5. Be Helpful**\n"
+                "- Be friendly and guide the user through the process."
+            )
 
-        # Construct the LLM prompt
-        prompt = (
-            f"The user wants to book an appointment on {booking_date} at {booking_time}.\n"
-            f"Here are the available slots:\n{slots_str}\n\n"
-            "Check if the user's preferred date and time are available. "
-            "If available, respond with '_available'. "
-            "If not, suggest the closest available slot in the format: 'Date: YYYY-MM-DD, Start Time: HH:MM, End Time: HH:MM'."
-        )
+            response = self.client.chat.completions.create(
+                model="gemma2-9b-it",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": f"Conversation history:\n{chatHistory}\n\nUser: {userChatQuery}",
+                    },
+                ],
+                max_tokens=500,
+            )
 
-        # Query the LLM
-        response = self.query_llm(prompt).strip().lower()
+            llm_response = response.choices[0].message.content.strip()
+            cleaned = (
+                llm_response.replace("```json", "")
+                .replace("```", "")
+                .replace("__confirm_and_book__", "")
+                .strip()
+            )
 
-        # Process the LLM response
-        if "_available" in response:
-            return {"status": "available"}
-        elif "date" in response and "start time" in response and "end time" in response:
-            # Extract the suggested slot from the response
-            return {"status": "suggested", "slot": response}
-        else:
-            return {"status": "unavailable"}
+            # Check if ready_to_book is true in the string
+            if "__confirm_and_book__" in llm_response.lower():
+                try:
+                    # Extract booking details using regex (even if JSON isn't well-formed)
+                    # First try JSON-style extraction
+                    service = re.search(
+                        r'"?appointment_type"?\s*:\s*"([^"]+)"', cleaned, re.IGNORECASE
+                    )
+                    date = re.search(
+                        r'"?date"?\s*:\s*"([^"]+)"', cleaned, re.IGNORECASE
+                    )
+                    start_time = re.search(
+                        r'"?start_time"?\s*:\s*"([^"]+)"', cleaned, re.IGNORECASE
+                    )
+                    end_time = re.search(
+                        r'"?end_time"?\s*:\s*"([^"]+)"', cleaned, re.IGNORECASE
+                    )
+                    name = re.search(
+                        r'"?customer_name"?\s*:\s*"([^"]+)"', cleaned, re.IGNORECASE
+                    )
+                    phone = re.search(
+                        r'"?customer_phone"?\s*:\s*"([^"]+)"', cleaned, re.IGNORECASE
+                    )
 
-    def calculate_end_time(self, start_time):
-        start = datetime.strptime(start_time, "%H:%M")
-        end = start.replace(hour=start.hour + 3)  # Assuming 1-hour appointments
-        return end.strftime("%H:%M")
+                    # If JSON-style didn't work, try Markdown-style fallback
+                    if not all([service, date, name, phone]):
+                        service = re.search(
+                            r"\*\*appointment_type:\*\*\s*([^\n]+)",
+                            cleaned,
+                            re.IGNORECASE,
+                        )
+                        date = re.search(
+                            r"\*\*date:\*\*\s*([^\n]+)", cleaned, re.IGNORECASE
+                        )
+                        start_time = re.search(
+                            r"\*\*start_time:\*\*\s*([^\n]+)", cleaned, re.IGNORECASE
+                        )
+                        end_time = re.search(
+                            r"\*\*end_time:\*\*\s*([^\n]+)", cleaned, re.IGNORECASE
+                        )
+                        name = re.search(
+                            r"\*\*customer_name:\*\*\s*([^\n]+)", cleaned, re.IGNORECASE
+                        )
+                        phone = re.search(
+                            r"\*\*customer_phone:\*\*\s*([^\n]+)",
+                            cleaned,
+                            re.IGNORECASE,
+                        )
+                    # Validate all fields are present
+                    if not all([service, date, start_time, end_time, name, phone]):
+                        raise ValueError("Incomplete booking details found.")
 
-    def format_booking_date(self, date_str):
-        """
-        Parse and format natural language dates into the required format (YYYY-MM-DD).
-        """
-        try:
-            # Use dateutil.parser to handle natural language dates
-            parsed_date = parse(date_str, fuzzy=True)
-            return parsed_date.strftime("%Y-%m-%d")
+                    # Construct booking dict
+                    booking_data = {
+                        "service": service.group(1).strip(),
+                        "date": date.group(1).strip(),
+                        "start_time": start_time.group(1).strip(),
+                        "end_time": end_time.group(1).strip(),
+                        "name": name.group(1).strip(),
+                        "phone": phone.group(1).strip(),
+                    }
+
+                    # Validate datetime format
+                    _ = datetime.fromisoformat(
+                        booking_data["date"]
+                    )  # Raises ValueError if invalid
+                    datetime.strptime(
+                        booking_data["start_time"], "%H:%M"
+                    )  # Validate start_time
+                    datetime.strptime(
+                        booking_data["end_time"], "%H:%M"
+                    )  # Validate end_time
+
+                    # Create event
+                    # calendar_agent = CalendarAgent()
+                    # result = await calendar_agent.create_calendar_events_google(
+                    #     booking_data
+                    # )
+                    event = Event(
+                        date=booking_data["date"],
+                        start_time=booking_data["start_time"],
+                        end_time=booking_data["end_time"],
+                        appointment_type=booking_data["service"],
+                        customer_name=booking_data["name"],
+                        customer_phone=booking_data["phone"],
+                        status="booked",
+                        notes=None,  # Add notes if applicable
+                    )
+
+                    # Return response with confirmation message
+                    result = book_slot(event)
+
+                    return result
+
+                except Exception as e:
+                    return (
+                        llm_response
+                        + f"\n\n❌ Failed to parse or create event: {str(e)}"
+                    )
+            else:
+                # Clean and show only response if not booking
+                trimmed_response = self.trim_response(llm_response)
+                return trimmed_response
+
         except Exception as e:
-            print(f"Error parsing date: {e}")
-            return None
+            print(f"Error handling query: {e}")
+            return {
+                "response": "An error occurred while processing your query. Please try again later."
+            }
+
+    def trim_response(self, text):
+        """
+        Remove JSON-style metadata and clean up output text.
+        """
+        # Remove full JSON block starting with "response":
+        trimmed = re.sub(
+            r'\{.*?"response"\s*:\s*".*?".*?\}',
+            "",
+            text,
+            flags=re.DOTALL,
+        )
+
+        # Also remove lines that just say ready_to_book: true/false (with or without JSON around)
+        trimmed = re.sub(
+            r'"ready_to_book"\s*:\s*(true|false)\s*\}?',
+            "",
+            trimmed,
+            flags=re.IGNORECASE,
+        )
+
+        # Clean up extra newlines and spaces
+        trimmed = re.sub(r"\n{2,}", "\n", trimmed)
+        trimmed = trimmed.strip()
+        return trimmed
