@@ -162,11 +162,11 @@ def extract_and_store_pdf(pdf_bytes: bytes) -> str:
         ollama_llm = OllamaLLM(
             model="llama3.1:8b", temperature=0.1
         )  # Initialize OllamaLLM
-        summary = ollama_llm.invoke(input=summary_prompt).strip()
+        # summary = ollama_llm.invoke(input=summary_prompt).strip()
 
         # Step 3: Embed both full text and summary
         vector_full = embedding_model.embed_query(full_text)
-        vector_summary = embedding_model.embed_query(summary)
+        # vector_summary = embedding_model.embed_query(summary)
 
         # Step 4: Store both in ChromaDB
         collection = chroma_client.get_or_create_collection(
@@ -174,16 +174,15 @@ def extract_and_store_pdf(pdf_bytes: bytes) -> str:
         )
 
         collection.add(
-            ids=[str(uuid4()), str(uuid4())],
-            documents=[full_text, summary],
-            embeddings=[vector_full, vector_summary],
+            ids=[str(uuid4())],
+            documents=[full_text],
+            embeddings=[vector_full],
             metadatas=[
                 {
                     "file_id": file_id,
                     "type": "full_text",
                     "length": len(full_text.split()),
-                },
-                {"file_id": file_id, "type": "summary", "length": len(summary.split())},
+                }
             ],
         )
 
@@ -264,6 +263,7 @@ class PdfAgent(Agent):
                 - Compliance Criteria-extract from the PDF content
 
                 ✅ Return only the relevant clauses based on the user query in the same format.
+                ✅ Return result with required HTML tags with styling, so that I can easily integrate to HTML chat bot.
                 🚫 Do not include any text outside of the JSON format.
                 """
             )
